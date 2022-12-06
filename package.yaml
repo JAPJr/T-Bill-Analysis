@@ -21,6 +21,11 @@ description:         Please see the README on GitHub at <https://github.com/JAPJ
 
 dependencies:
 - base >= 4.7 && < 5
+- time
+- bytestring
+- http-conduit
+- numbers
+- process
 
 ghc-options:
 - -Wall

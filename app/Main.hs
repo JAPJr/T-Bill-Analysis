@@ -59,7 +59,7 @@ main = do
   putStrLn "\n\n\nThe rates are:  "
   putStrLn $ show rates
   putStrLn "\n\n\n\n  Here are the least-squares fits ('d' = days from last data point in fit):"
-  putStrLn $ analyzeRates (map fromIntegral dNums) billSelection rates 
+  putStrLn $ rateFitReport$ analyzeRates (map fromIntegral dNums) billSelection rates 
 
 
 
@@ -73,7 +73,7 @@ main = do
 isDataReal :: IO (Bool)
 isDataReal = do
   putStrLn "Enter 'r' to download T-Bill rates from treasury, or 't' to use testData for rates"
-  c <- getChar
+  c <- fmap head getLine
   putStrLn ""
   case c of
     'r' -> return True
@@ -113,15 +113,18 @@ dayNumsAndRates :: Day ->[(Day, [Double])] -> ([Integer], [[Double]])
 dayNumsAndRates endDay rateTable = foldr addToLists ([], []) rateTable
   where addToLists (day, rates) (dayNums, rateList) = (diffDays day endDay : dayNums, rates : rateList)
 
-analyzeRates :: [Double] -> [Bill] -> [[Double]] -> String
-analyzeRates _ [] _ = "\n\n"                                        -- Create a table showing least squares fit for selected bills
-analyzeRates dayNums weeks allRates = "\n" ++ show (head weeks) ++ " bill:  apr  = " ++ toNdecimal 4  m ++ " d + " ++ toNdecimal 2 b 
-                                       ++ analyzeRates dayNums (tail weeks) moreRates
-  where (m,b) = leastSq dayNums rates
-        rates = map head allRates
-        moreRates = map tail allRates
+analyzeRates :: [Double] -> [Bill] -> [[Double]] -> [(Bill, Double, Double)]  -- Create a table showing least squares fit for selected bills
+analyzeRates dayNums weeks allRates = analyzeEachBill dayNums weeks allRates []
 
+analyzeEachBill :: [Double] -> [Bill] -> [[Double]] -> [(Bill, Double, Double)] -> [(Bill, Double, Double)]
+analyzeEachBill _ [] _ results = results
+analyzeEachBill dayNums (week : remainWeeks) (rate : remainRates) results = analyzeEachBill dayNums remainWeeks remainRates ((week, m, b) : results)
+  where (m,b) = leastSq dayNums rate
 
+rateFitReport :: [(Bill, Double, Double)] -> String
+rateFitReport fitResults = foldr addBillResult "" fitResults
+  where addBillResult (bill, m, b) rpt = ( "\n" ++ show bill ++ ":  apr = " ++ toNdecimal 4 m ++ "d + " ++ toNdecimal 2 b ) ++ rpt
+         
 
 leastSq :: [Double] -> [Double] -> (Double, Double)
 leastSq xVals yVals = (m, b)  -- Slope and intercept of least squares fit 
@@ -132,6 +135,17 @@ leastSq xVals yVals = (m, b)  -- Slope and intercept of least squares fit
         ssxy = (sum $ zipWith (*) xVals yVals) - nPoints * xAve * yAve
         m = ssxy/ssxx
         b = ave yVals - m * ave xVals
+
+{--
+aprWithReinvestment:: BillData -> Int -> Double
+aprWithReinvestment (weeks, intRate, deltaRate) reinvestWeeks = 100 * ( factorForWholePeriods * factorForFracPeriods - 1.0) * 365.0 / fromIntegral (reinvestWeeks * 7)
+  where  wholePeriods = fromIntegral (reinvestWeeks `div` weeks)
+         fracPeriod = fromIntegral reinvestWeeks / fromIntegral weeks - wholePeriods 
+         factorAtMaturity = 0.01 * intRate * ( fromIntegral weeks * 7.0 / 365.0 ) + 1.0   
+         factorChangeAtMaturity = 0.01 * (7.0 * fromIntegral weeks * deltaRate ) *  ( fromIntegral weeks * 7.0 / 365.0 ) 
+         factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity))  1 [0 .. wholePeriods -1] 
+         factorForFracPeriods = ( (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1)* fracPeriod + 1)
+--}
 
 
 fromJust :: Maybe a -> a
