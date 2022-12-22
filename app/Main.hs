@@ -22,6 +22,15 @@ instance Show Bill where
   show TwentySixWk = "26-Week"
   show FiftyTwoWk = "52-Week"
 
+billTime :: Bill -> Int
+billTime bill = case bill of
+  FourWk -> 4
+  EightWk -> 8
+  ThirteenWk -> 13
+  SeventeenWk -> 17
+  TwentySixWk -> 26
+  FiftyTwoWk -> 52
+
 columnList :: [(Bill, Int)]
 columnList = [(FourWk, 1), (EightWk, 3), (ThirteenWk, 5), (SeventeenWk, 7), (TwentySixWk, 9), (FiftyTwoWk, 11)]
 
@@ -60,7 +69,7 @@ main = do
   putStrLn $ show rates
   putStrLn "\n\n\n\n  Here are the least-squares fits ('d' = days from last data point in fit):"
   putStrLn $ rateFitReport$ analyzeRates (map fromIntegral dNums) billSelection rates 
-
+  
 
 
 
@@ -124,6 +133,50 @@ analyzeEachBill dayNums (week : remainWeeks) (rate : remainRates) results = anal
 rateFitReport :: [(Bill, Double, Double)] -> String
 rateFitReport fitResults = foldr addBillResult "" fitResults
   where addBillResult (bill, m, b) rpt = ( "\n" ++ show bill ++ ":  apr = " ++ toNdecimal 4 m ++ "d + " ++ toNdecimal 2 b ) ++ rpt
+
+
+
+
+
+
+
+-- ************************************ This section needs to be fixed to mesh with this program ***************************************
+{--
+aprDiffTable :: [(Bill, Double, Double)] ->  [(MatureTime, [(MatureTime, InterestRate)])]  -- Note Bill must be converted to Int
+aprDiffTable billLeastSquares = reverse $ getNextSetOfDiffs billLeastSquares []
+  where getNextSetOfDiffs remainingData diffList
+          |(tail remainingData) == [] = diffList
+          |otherwise                  = getNextSetOfDiffs (tail remainingData) ((aprDiffs remainingData) : diffList)
+
+aprDiffs :: [(Bil, Double, Double)] -> (MatureTime, [(MatureTime, InterestRate)])
+aprDiffs (billData : comparisonBillsData) = (getWeeks billData, comparisons)
+  where getWeeks (bill, _, _) = billTime bill
+        diffInterestWithLongerBill shortBillData (longWeeks, longIntRate, _) = aprWithReinvestment shortBillData longWeeks - longIntRate
+        comparisons = foldr ( \compareTo comps -> (getWeeks compareTo, diffInterestWithLongerBill billData compareTo) : comps ) [] comparisonBillsData                                
+
+aprWithReinvestment:: BillData -> Int -> Double
+aprWithReinvestment (weeks, intRate, deltaRate) reinvestWeeks = 100 * ( factorForWholePeriods * factorForFracPeriods - 1.0) * 365.0 / fromIntegral (reinvestWeeks * 7)
+  where  wholePeriods = fromIntegral (reinvestWeeks `div` weeks)
+         fracPeriod = fromIntegral reinvestWeeks / fromIntegral weeks - wholePeriods 
+         factorAtMaturity = 0.01 * intRate * ( fromIntegral weeks * 7.0 / 365.0 ) + 1.0   
+         factorChangeAtMaturity = 0.01 * (7.0 * fromIntegral weeks * deltaRate ) *  ( fromIntegral weeks * 7.0 / 365.0 ) 
+         factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity))  1 [0 .. wholePeriods -1] 
+         factorForFracPeriods = ( (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1)* fracPeriod + 1)
+
+--}
+-- ************************************ End of section to be fixed **************************************************
+
+aprWithReinvest :: (Bill, Double, Double) -> Bill -> Double
+aprWithReinvest (billShort, m, b) billLong = 100 * (factorForWholePeriods * factorForFracPeriod - 1.0) * 365.0 / fromIntegral (tLong * 7)
+  where tShort = billTime billShort
+        tLong = billTime billLong
+        wholePeriods = fromIntegral (tLong `div` tShort) :: Double
+        fracPeriod = (fromIntegral tLong) / (fromIntegral tShort) - wholePeriods
+        factorAtMaturity = 0.01 * aprToWeekPct b tShort + 1.0
+        factorChangeAtMaturity = 0.01 * aprToWeekPct (7.0 * (fromIntegral tShort) *  m) (fromIntegral tShort)
+        factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity) ) 1.0 [0 .. wholePeriods - 1]
+        factorForFracPeriod = (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1 ) * fracPeriod + 1
+
          
 
 leastSq :: [Double] -> [Double] -> (Double, Double)
@@ -136,16 +189,9 @@ leastSq xVals yVals = (m, b)  -- Slope and intercept of least squares fit
         m = ssxy/ssxx
         b = ave yVals - m * ave xVals
 
-{--
-aprWithReinvestment:: BillData -> Int -> Double
-aprWithReinvestment (weeks, intRate, deltaRate) reinvestWeeks = 100 * ( factorForWholePeriods * factorForFracPeriods - 1.0) * 365.0 / fromIntegral (reinvestWeeks * 7)
-  where  wholePeriods = fromIntegral (reinvestWeeks `div` weeks)
-         fracPeriod = fromIntegral reinvestWeeks / fromIntegral weeks - wholePeriods 
-         factorAtMaturity = 0.01 * intRate * ( fromIntegral weeks * 7.0 / 365.0 ) + 1.0   
-         factorChangeAtMaturity = 0.01 * (7.0 * fromIntegral weeks * deltaRate ) *  ( fromIntegral weeks * 7.0 / 365.0 ) 
-         factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity))  1 [0 .. wholePeriods -1] 
-         factorForFracPeriods = ( (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1)* fracPeriod + 1)
---}
+
+
+aprToWeekPct apr weeks = apr * fromIntegral weeks * 7/ 365
 
 
 fromJust :: Maybe a -> a
