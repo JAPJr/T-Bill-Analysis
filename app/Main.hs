@@ -3,7 +3,8 @@ module Main (main) where
 import Network.HTTP.Conduit (simpleHttp)
 import qualified Data.ByteString.Lazy.Char8 as L8 (unpack)
 --import qualified Data.List as DL (intercalate)
-import Data.Time.Calendar (fromGregorian, Day, diffDays)
+import Data.List
+import Data.Time.Calendar (fromGregorian, toGregorian, Day, diffDays)
 --import System.Process (callCommand)
 
 
@@ -37,7 +38,7 @@ columnList :: [(Bill, Int)]
 columnList = [(FourWk, 1), (EightWk, 3), (ThirteenWk, 5), (SeventeenWk, 7), (TwentySixWk, 9), (FiftyTwoWk, 11)]
 
 billSelection :: [Bill]
-billSelection = [FourWk, EightWk] --[FourWk, EightWk, ThirteenWk, TwentySixWk, FiftyTwoWk]
+billSelection = [EightWk] --[FourWk, EightWk, ThirteenWk, TwentySixWk, FiftyTwoWk]
 
 
 
@@ -51,7 +52,6 @@ dropEndQuotes str = dropEndingQuote $ dropLeadingQuote str
         dropEndingQuote txt = if last txt == '"' then init txt else txt
 
 rateColumns :: [Int]
---rateColumns = foldr (\wk lst -> fromJust (lookup wk columnList) : lst) [] billSelection
 rateColumns = map (\wk -> fromJust (lookup wk columnList)) billSelection
 
 
@@ -60,25 +60,30 @@ main = do
   realData <- isDataReal :: IO Bool
   csvData <- if realData then L8.unpack <$> simpleHttp treasURL
                          else readFile "testData.csv"
+
   (startDay, endDay) <- getInterval
   putStrLn ("Start day is " ++ show startDay ++ "     End day is " ++ show endDay)
+
   let dailyRates = selectData startDay endDay csvData
+  putStrLn "\n\ndailyRates:"
   print (Table dailyRates)
+
   let (dNums, rates) = dayNumsAndRates endDay dailyRates
-  putStrLn "\n\n\nThe day numbers are:  "
-  print dNums
-  putStrLn "\n\n\nThe rates are:  "
-  print rates
-  putStrLn "\n\nFour week rates are:  "
-  putStrLn $ spacesToCommas $ unwords $ map (show . head) rates
+
 --  putStrLn "\n\n\n\n  Here are the least-squares fits ('d' = days from last data point in fit):"
   putStrLn "\n\nDebugging."
   putStrLn "\n rates:"
   print rates
   putStrLn "\nbillSelection:"
   print billSelection
-  putStr "\nanalyzeRates: "
-  print $ analyzeRates dNums billSelection rates
+  putStr "\nLeast squares of rates: "
+  let ratesLeastSquares = analyzeRates dNums billSelection rates
+  print ratesLeastSquares
+--  print $ analyzeRates dNums billSelection rates
+  putStrLn "\nLeast squares end points:\n"
+  putStrLn $ leastSquaresEndPoints startDay endDay ratesLeastSquares
+  writeFile "LsqEndpoints.txt" (leastSquaresEndPoints startDay endDay ratesLeastSquares)
+
 
 --  putStrLn $ rateFitReport$ analyzeRates  dNums billSelection rates 
   
@@ -119,14 +124,17 @@ textToDay txt = if length threeStrings == 3 then fromGregorian y m d --Date {mon
         y = fourDigitYr $ read (threeStrings !! 2) :: Integer
         fourDigitYr yr = if  yr < 1000 then yr + 2000 else yr
 
+dayToText :: Day -> String
+dayToText day = show m  ++ "/" ++ show d ++ "/" ++ show y 
+  where (y,m,d) = toGregorian day
+
 selectData :: Day -> Day -> String  -> [(Day, [Double])]
---selectData  startDay endDay allRates = filter inRange $ reverse $ map toDateRateTuple $ csvToList allRates  -- Collect data for bills specified by list 'weekSelec' defined before 'main'
-selectData  startDay endDay allRates = reverse (filter inRange (map toDateRateTuple $ csvToList allRates))
+--selectData  startDay endDay allRates = filter inRange $ reverse $ map toDateRateTuple $ csvToList allRates  
+selectData  startDay endDay allRates = reverse (filter inRange (map toDateRateTuple $ csvToList allRates))  -- Collect data for bills specified by list 'weekSelec' defined before 'main'
   where csvToList = map wordsWithComma . drop 1 . lines 
         toDateRateTuple :: [String] -> (Day, [Double])
         toDateRateTuple [] = error "Empty line of date and rates"
         toDateRateTuple (date : rates) = (textToDay date, map read (select rates))
-        select rs = foldr (\c selected -> (rs !! c) : selected) [] rateColumns
         select rs = map (rs !!) rateColumns
         inRange (day, _) = day >= startDay && day <= endDay 
 
@@ -148,16 +156,16 @@ analyzeEachBill dayNums (week : remainWeeks) ratesList results = analyzeEachBill
         remainRates = map tail ratesList
         (m,b) = leastSq dayNums rates
 
-{--
-analyzeRates :: [Double] -> [Bill] -> [[Double]] -> [Double] --[(Bill, [Double], [Bill])]  -- Create a table showing least squares fit for selected bills
-analyzeRates dayNums weeks allRates = analyzeEachBill dayNums weeks allRates []
 
-analyzeEachBill :: [Double] -> [Bill] -> [[Double]] -> [(Bill, [Double], [Bill])] -> [Double] --[(Bill, [Double], [Bill])]
-analyzeEachBill dayNums (week : remainWeeks) ratesList results = rates
-  where rates = map head ratesList
-        remainRates = map tail ratesList
-        (m,b) = leastSq dayNums rates
---}
+leastSquaresEndPoints :: Day -> Day -> [(Bill, Double, Double)] -> String
+leastSquaresEndPoints startDay endDay ratesLeastSquares = dayToText startDay ++ ", " ++ numbersToCsv startValues ++ "\n"
+                                                      ++  dayToText endDay ++ ", " ++ numbersToCsv  endValues
+  where startValues :: [Double]
+        startValues = foldr (  \(_, m, b) lines ->   ((m * fromIntegral ( diffDays startDay endDay)) + b) : lines  ) [] ratesLeastSquares
+        endValues = map (\(_, _, b) -> b) ratesLeastSquares  -- assuming end is day 0 as in analysis
+        numbersToCsv :: [Double] -> String
+        numbersToCsv = intercalate  ", " . map show
+
 
 {--
 rateFitReport :: [(Bill, Double, Double)] -> String
@@ -167,49 +175,6 @@ rateFitReport fitResults = foldr addBillResult "" fitResults
 --}
 
 
-
-
-
-
--- ************************************ This section needs to be fixed to mesh with this program ***************************************
-{--
-aprDiffTable :: [(Bill, Double, Double)] ->  [(MatureTime, [(MatureTime, InterestRate)])]  -- Note Bill must be converted to Int
-aprDiffTable billLeastSquares = reverse $ getNextSetOfDiffs billLeastSquares []
-  where getNextSetOfDiffs remainingData diffList
-          |(tail remainingData) == [] = diffList
-          |otherwise                  = getNextSetOfDiffs (tail remainingData) ((aprDiffs remainingData) : diffList)
-
-aprDiffs :: [(Bil, Double, Double)] -> (MatureTime, [(MatureTime, InterestRate)])
-aprDiffs (billData : comparisonBillsData) = (getWeeks billData, comparisons)
-  where getWeeks (bill, _, _) = billTime bill
-        diffInterestWithLongerBill shortBillData (longWeeks, longIntRate, _) = aprWithReinvestment shortBillData longWeeks - longIntRate
-        comparisons = foldr ( \compareTo comps -> (getWeeks compareTo, diffInterestWithLongerBill billData compareTo) : comps ) [] comparisonBillsData                                
-
-aprWithReinvestment:: BillData -> Int -> Double
-aprWithReinvestment (weeks, intRate, deltaRate) reinvestWeeks = 100 * ( factorForWholePeriods * factorForFracPeriods - 1.0) * 365.0 / fromIntegral (reinvestWeeks * 7)
-  where  wholePeriods = fromIntegral (reinvestWeeks `div` weeks)
-         fracPeriod = fromIntegral reinvestWeeks / fromIntegral weeks - wholePeriods 
-         factorAtMaturity = 0.01 * intRate * ( fromIntegral weeks * 7.0 / 365.0 ) + 1.0   
-         factorChangeAtMaturity = 0.01 * (7.0 * fromIntegral weeks * deltaRate ) *  ( fromIntegral weeks * 7.0 / 365.0 ) 
-         factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity))  1 [0 .. wholePeriods -1] 
-         factorForFracPeriods = ( (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1)* fracPeriod + 1)
-
---}
--- ************************************ End of section to be fixed **************************************************
-
-
-{--
-aprWithReinvest :: (Bill, Double, Double) -> Bill -> Double
-aprWithReinvest (billShort, m, b) billLong = 100 * (factorForWholePeriods * factorForFracPeriod - 1.0) * 365.0 / fromIntegral (tLong * 7)
-  where tShort = billTime billShort
-        tLong = billTime billLong
-        wholePeriods = fromIntegral (tLong `div` tShort) :: Double
-        fracPeriod = (fromIntegral tLong) / (fromIntegral tShort) - wholePeriods
-        factorAtMaturity = 0.01 * aprToWeekPct b tShort + 1.0
-        factorChangeAtMaturity = 0.01 * aprToWeekPct (7.0 * (fromIntegral tShort) *  m) (fromIntegral tShort)
-        factorForWholePeriods = foldr ( \n fact -> fact * (factorAtMaturity + n * factorChangeAtMaturity) ) 1.0 [0 .. wholePeriods - 1]
-        factorForFracPeriod = (factorAtMaturity + wholePeriods * factorChangeAtMaturity - 1 ) * fracPeriod + 1
---}
          
 
 leastSq :: [Double] -> [Double] -> (Double, Double)
@@ -234,10 +199,10 @@ fromJust (Just x) = x
 ave :: [Double] -> Double
 ave xVals = sum xVals / fromIntegral (length xVals)
 
-toNdecimal :: Int -> Double -> String
-toNdecimal n dbl =  "0." ++ replicate zeros '0' ++ show (round (dbl * scaleUp)) -- assuming dbl < 0, returns string showing n digits
-  where scaleUp = 10^n
-        zeros = min n $  ceiling (negate $ logBase 10 dbl) - 1
+
+
+toNDecimal :: Int -> Double -> Double
+toNDecimal n dbl = (fromIntegral $ round (10^n * dbl)) / 10^n
 
 
 
