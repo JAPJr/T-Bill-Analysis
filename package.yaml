@@ -26,6 +26,7 @@ dependencies:
 - http-conduit
 - numbers
 - process
+- boxes
 
 ghc-options:
 - -Wall

@@ -6,6 +6,7 @@ import qualified Data.ByteString.Lazy.Char8 as L8 (unpack)
 import Data.List
 import Data.Time.Calendar (fromGregorian, toGregorian, Day, diffDays)
 --import System.Process (callCommand)
+import qualified Text.PrettyPrint.Boxes as B
 
 
 reportYear :: String
@@ -16,31 +17,18 @@ treasURL= "https://home.treasury.gov/resource-center/data-chart-center/interest-
 
 data Bill = FourWk | EightWk | ThirteenWk | SeventeenWk | TwentySixWk | FiftyTwoWk deriving Eq
 instance Show Bill where
-  show FourWk = "4-Week "
-  show EightWk = "8-Week "
+  show FourWk = "4-Week"
+  show EightWk = "8-Week"
   show ThirteenWk = "13-Week"
   show SeventeenWk = "17-Week"
   show TwentySixWk = "26-Week"
   show FiftyTwoWk = "52-Week"
 
-{--
-billTime :: Bill -> Int
-billTime bill = case bill of
-  FourWk -> 4
-  EightWk -> 8
-  ThirteenWk -> 13
-  SeventeenWk -> 17
-  TwentySixWk -> 26
-  FiftyTwoWk -> 52
---}
-
 columnList :: [(Bill, Int)]
-columnList = [(FourWk, 1), (EightWk, 3), (ThirteenWk, 5), (SeventeenWk, 7), (TwentySixWk, 9), (FiftyTwoWk, 11)]
+columnList = [(FourWk, 1), (EightWk, 3), (ThirteenWk, 5), (SeventeenWk, 7), (TwentySixWk, 9), (FiftyTwoWk, 11)] --Where to find bill rates for investors ie not bank rates
 
 billSelection :: [Bill]
-billSelection = [EightWk] --[FourWk, EightWk, ThirteenWk, TwentySixWk, FiftyTwoWk]
-
-
+billSelection = [FourWk, EightWk, ThirteenWk, TwentySixWk, FiftyTwoWk]  --Bills to be Analyzed :: [(Day, [String])
 
 newtype Table a b = Table [(a,b)]
 instance (Show a, Show b) => Show (Table a b) where
@@ -57,43 +45,29 @@ rateColumns = map (\wk -> fromJust (lookup wk columnList)) billSelection
 
 main :: IO ()
 main = do
+  --Get data for analysis
   realData <- isDataReal :: IO Bool
   csvData <- if realData then L8.unpack <$> simpleHttp treasURL
                          else readFile "testData.csv"
-
+  --Interval to be analyzed
   (startDay, endDay) <- getInterval
-  putStrLn ("Start day is " ++ show startDay ++ "     End day is " ++ show endDay)
 
-  let dailyRates = selectData startDay endDay csvData
-  putStrLn "\n\ndailyRates:"
-  print (Table dailyRates)
+  --Get investor relevant data and convert date strings to Day type
+  let dailyRates = selectData2 startDay endDay csvData  --Selects rate columns :: [(Day, [String])]
+      (dNums, rates) = dayNumsAndRates endDay dailyRates --Separates dateNumbers and rates into two arrays, converts rate strings to doubles
+      ratesLeastSquares = analyzeRates dNums billSelection rates --billSelection chooses which bills to analyze
+      lsqResultsAsStrings = map (\(bill, m, b) -> [show bill, (show . toNDecimal 4) m, (show . toNDecimal 3) b]) ratesLeastSquares
 
-  let (dNums, rates) = dayNumsAndRates endDay dailyRates
-
---  putStrLn "\n\n\n\n  Here are the least-squares fits ('d' = days from last data point in fit):"
-  putStrLn "\n\nDebugging."
-  putStrLn "\n rates:"
-  print rates
-  putStrLn "\nbillSelection:"
-  print billSelection
-  putStr "\nLeast squares of rates: "
-  let ratesLeastSquares = analyzeRates dNums billSelection rates
-  print ratesLeastSquares
---  print $ analyzeRates dNums billSelection rates
-  putStrLn "\nLeast squares end points:\n"
-  putStrLn $ leastSquaresEndPoints startDay endDay ratesLeastSquares
-  writeFile "LsqEndpoints.txt" (leastSquaresEndPoints startDay endDay ratesLeastSquares)
+  putStrLn "\n\n"
+  table "Least Squares" ["Bill", "m", "b"] lsqResultsAsStrings 25
+  putStrLn "\n\n"
+  table "Least Squares End Points" ("Date" : map show billSelection) (leastSquaresEndPoints startDay endDay ratesLeastSquares) 25
 
 
---  putStrLn $ rateFitReport$ analyzeRates  dNums billSelection rates 
+
   
 spacesToCommas :: String -> String
 spacesToCommas = map (\c -> if c == ' ' then ',' else c)
-
-
-
-
-
 
 isDataReal :: IO Bool
 isDataReal = do
@@ -107,11 +81,14 @@ isDataReal = do
 
 getInterval :: IO (Day, Day)
 getInterval = do
-  putStrLn "Input starting date for data ( m/d/y ):"
+  putStrLn "\nInput starting date for data ( m/d/y ):"
   startDay <- fmap textToDay getLine
   putStrLn "Input ending date for data ( m/d/y ):"
   endDay <- fmap textToDay getLine
-  return  (startDay, endDay)
+  putStrLn ("\nYou wish to analyze bills between " ++ show startDay ++ " and " ++ show endDay ++ "? enter y for 'yes' and n for 'n'.")
+  response <- getChar
+  if response == 'y' then return  (startDay, endDay)
+                     else getInterval
 
 
 
@@ -139,14 +116,24 @@ selectData  startDay endDay allRates = reverse (filter inRange (map toDateRateTu
         inRange (day, _) = day >= startDay && day <= endDay 
 
 
-dayNumsAndRates :: Day ->[(Day, [Double])] -> ([Double], [[Double]])
-dayNumsAndRates endDay = foldr addToLists ([], [])
-  where addToLists (day, rates) (dayNums, rateList) = (fromIntegral (diffDays day endDay) : dayNums, rates : rateList)
 
+selectData2 ::Day -> Day -> String -> [(Day, [String])]
+selectData2 startDate endDate dataCsv = selectColumns $ selectDateRange $ map lineToDateRatesPair $ csvToLines dataCsv
+  where csvToLines = map wordsWithComma . drop 1 . lines
+        lineToDateRatesPair line = (textToDay (head line), tail line)
+        selectDateRange = filter (\(day,_) -> day >= startDate && day <= endDate)
+        selectColumns  = map (\(day,rates) -> (day, map (rates !!) rateColumns))
+
+
+
+dayNumsAndRates :: Day ->[(Day, [String])] -> ([Double], [[Double]])
+dayNumsAndRates endDay = foldr addToLists ([], [])
+  where addToLists (day, rates) (dayNums, rateList) = (fromIntegral (diffDays day endDay) : dayNums, (map read rates :: [Double]) : rateList)
 
 
 analyzeRates :: [Double] -> [Bill] -> [[Double]] -> [(Bill, Double, Double)]  -- Create a table showing least squares fit for selected bills
 analyzeRates dayNums weeks allRates = analyzeEachBill dayNums weeks allRates []
+
 
 
 analyzeEachBill :: [Double] -> [Bill] -> [[Double]] -> [(Bill, Double, Double)] -> [(Bill, Double, Double)]
@@ -157,11 +144,14 @@ analyzeEachBill dayNums (week : remainWeeks) ratesList results = analyzeEachBill
         (m,b) = leastSq dayNums rates
 
 
-leastSquaresEndPoints :: Day -> Day -> [(Bill, Double, Double)] -> String
-leastSquaresEndPoints startDay endDay ratesLeastSquares = dayToText startDay ++ ", " ++ numbersToCsv startValues ++ "\n"
-                                                      ++  dayToText endDay ++ ", " ++ numbersToCsv  endValues
+--leastSquaresEndPoints :: Day -> Day -> [(Bill, Double, Double)] -> String
+--leastSquaresEndPoints startDay endDay ratesLeastSquares = dayToText startDay ++ ", " ++ numbersToCsv startValues ++ "\n"
+--                                                      ++  dayToText endDay ++ ", " ++ numbersToCsv  endValues
+leastSquaresEndPoints :: Day -> Day -> [(Bill, Double, Double)] -> [[String]]
+leastSquaresEndPoints startDay endDay ratesLeastSquares = [(dayToText startDay) : (map (show . toNDecimal 4) startValues), 
+                                                           (dayToText endDay) : (map (show . toNDecimal 4) endValues)]
   where startValues :: [Double]
-        startValues = foldr (  \(_, m, b) lines ->   ((m * fromIntegral ( diffDays startDay endDay)) + b) : lines  ) [] ratesLeastSquares
+        startValues = foldr (  \(_, m, b) values ->   ((m * fromIntegral ( diffDays startDay endDay)) + b) : values  ) [] ratesLeastSquares
         endValues = map (\(_, _, b) -> b) ratesLeastSquares  -- assuming end is day 0 as in analysis
         numbersToCsv :: [Double] -> String
         numbersToCsv = intercalate  ", " . map show
@@ -202,7 +192,7 @@ ave xVals = sum xVals / fromIntegral (length xVals)
 
 
 toNDecimal :: Int -> Double -> Double
-toNDecimal n dbl = (fromIntegral $ round (10^n * dbl)) / 10^n
+toNDecimal n dbl = fromIntegral (round (10^n * dbl) :: Integer) / 10^n
 
 
 
@@ -212,3 +202,11 @@ wordsWithComma str
   |otherwise = newWord : wordsWithComma (drop 1 rest)
   where rest = dropWhile (/= ',') str
         newWord = takeWhile (/= ',') str
+
+table :: String -> [String] -> [[String]] -> Int -> IO ()
+table title headings entries colWidth = B.printBox $ B.vsep 1 B.center1 [titleBox, headingsBox, entriesBox] 
+  where tableEntry = B.alignHoriz B.right colWidth . B.text
+        tableRow = B.hcat B.bottom . map tableEntry
+        titleBox = B.text title
+        headingsBox = B.hcat B.bottom $ map tableEntry headings
+        entriesBox = B.vcat B.left $ map tableRow entries
