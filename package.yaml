@@ -27,6 +27,7 @@ dependencies:
 - numbers
 - process
 - boxes
+- gnuplot
 
 ghc-options:
 - -Wall
